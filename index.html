@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Запись на стирку</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: Arial, sans-serif;
+    max-width: 820px;
+    margin: 30px auto;
+    padding: 0 15px;
+    background: #f4f6f8;
+  }
+  h1 { font-size: 22px; }
+  .card {
+    background: #fff;
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.08);
+    margin-bottom: 20px;
+  }
+  label { display: block; margin-top: 10px; font-weight: bold; font-size: 14px; }
+  input, select {
+    width: 100%;
+    padding: 8px;
+    margin-top: 4px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    font-size: 14px;
+  }
+  .row {
+    display: flex;
+    gap: 12px;
+  }
+  .row > div { flex: 1; }
+
+  /* Переключатель машинок */
+  .machines {
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+  }
+  .machine-btn {
+    flex: 1;
+    padding: 12px;
+    border: 2px solid #ccc;
+    border-radius: 8px;
+    background: #fafafa;
+    cursor: pointer;
+    text-align: center;
+    font-size: 14px;
+    transition: .15s;
+  }
+  .machine-btn:hover { border-color: #90caf9; }
+  .machine-btn.active {
+    border-color: #1976d2;
+    background: #e3f2fd;
+    font-weight: bold;
+  }
+
+  /* Сетка слотов */
+  .slots {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .slot {
+    padding: 10px;
+    text-align: center;
+    border-radius: 6px;
+    border: 1px solid #ccc;
+    cursor: pointer;
+    font-size: 14px;
+    user-select: none;
+  }
+  .slot.free { background: #e8f5e9; }
+  .slot.free:hover { background: #c8e6c9; }
+  .slot.busy {
+    background: #ffebee;
+    color: #b71c1c;
+    cursor: not-allowed;
+    text-decoration: line-through;
+  }
+  .slot.past {
+    background: #eceff1;
+    color: #90a4ae;
+    cursor: not-allowed;
+    text-decoration: line-through;
+  }
+  .slot.selected { outline: 3px solid #1976d2; }
+
+  button.submit {
+    margin-top: 16px;
+    padding: 10px 20px;
+    background: #1976d2;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 15px;
+    cursor: pointer;
+  }
+  button.submit:disabled { background: #90a4ae; cursor: not-allowed; }
+
+  .msg { margin-top: 12px; font-size: 14px; }
+  .msg.ok { color: #2e7d32; }
+  .msg.err { color: #c62828; }
+
+  .legend { margin-top: 10px; font-size: 13px; color: #555; }
+  .legend span { display: inline-block; padding: 2px 8px; border-radius: 4px; margin-right: 8px; }
+</style>
+</head>
+<body>
+
+<h1>🧺 Запись на стирку</h1>
+
+<div class="card">
+  <label>ФИО</label>
+  <input id="fio" type="text" placeholder="Иванов Иван Иванович">
+
+  <label>Комната</label>
+  <input id="room" type="text" placeholder="например, 312">
+
+  <div class="row">
+    <div>
+      <label>Этаж</label>
+      <select id="floor">
+        <option value="">— выберите —</option>
+        <option value="1">1 этаж</option>
+        <option value="2">2 этаж</option>
+        <option value="3">3 этаж</option>
+      </select>
+    </div>
+    <div>
+      <label>Расположение</label>
+      <select id="location">
+        <option value="">— выберите —</option>
+        <option value="A">A</option>
+        <option value="C">C</option>
+      </select>
+    </div>
+  </div>
+
+  <label>Дата</label>
+  <input id="date" type="date">
+
+  <label>Машинка</label>
+  <div class="machines" id="machines">
+    <div class="machine-btn active" data-machine="1">Машинка №1</div>
+    <div class="machine-btn" data-machine="2">Машинка №2</div>
+  </div>
+
+  <label>Время (каждый час)</label>
+  <div id="slots" class="slots"></div>
+
+  <div class="legend">
+    <span style="background:#e8f5e9">свободно</span>
+    <span style="background:#ffebee;color:#b71c1c">занято</span>
+    <span style="background:#eceff1;color:#90a4ae">прошло</span>
+  </div>
+
+  <button id="submit" class="submit" disabled>Записаться</button>
+  <div id="msg" class="msg"></div>
+</div>
+
+<script>
+  // ---------- Настройки ----------
+  const START_HOUR = 6;
+  const END_HOUR   = 23;         // последний слот 23:00–24:00
+  const STORAGE_KEY = 'laundry_bookings_v2';
+
+  let selectedSlot   = null;
+  let selectedMachine = '1';
+
+  const $date     = document.getElementById('date');
+  const $floor    = document.getElementById('floor');
+  const $location = document.getElementById('location');
+  const $slots    = document.getElementById('slots');
+  const $submit   = document.getElementById('submit');
+  const $msg      = document.getElementById('msg');
+
+  // Список часов
+  const HOURS = [];
+  for (let h = START_HOUR; h <= END_HOUR; h++) {
+    const from = String(h).padStart(2, '0') + ':00';
+    const to   = String(h + 1).padStart(2, '0') + ':00';
+    HOURS.push({ key: from, label: `${from}–${to}` });
+  }
+
+  // Сегодняшняя дата
+  const today = new Date().toISOString().split('T')[0];
+  $date.value = today;
+  $date.min = today;
+
+  // ---------- Хранилище (localStorage; для общего доступа → Firestore) ----------
+  function getBookings() {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+  }
+  function saveBooking(b) {
+    const all = getBookings();
+    all.push(b);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+  }
+
+  // Уникальный ключ точки стирки
+  function pointKey(floor, location) {
+    return `f${floor}-${location}`;
+  }
+
+  // ---------- Переключатель машинок ----------
+  document.querySelectorAll('.machine-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.machine-btn')
+        .forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      selectedMachine = btn.dataset.machine;
+      renderSlots();
+    });
+  });
+
+  // ---------- Отрисовка слотов ----------
+  function renderSlots() {
+    const date = $date.value;
+    const floor = $floor.value;
+    const location = $location.value;
+    selectedSlot = null;
+    $submit.disabled = true;
+    $slots.innerHTML = '';
+
+    if (!date || !floor || !location) {
+      $slots.innerHTML = '<div style="grid-column:1/-1;color:#888;font-size:14px;">Выберите этаж и расположение, чтобы увидеть расписание</div>';
+      return;
+    }
+
+    const point = pointKey(floor, location);
+    const booked = getBookings()
+      .filter(b =>
+        b.date === date &&
+        b.point === point &&
+        String(b.machine) === String(selectedMachine)
+      )
+      .map(b => b.time);
+
+    const isToday = date === today;
+    const nowHour = new Date().getHours();
+
+    HOURS.forEach(({ key, label }) => {
+      const div = document.createElement('div');
+      div.className = 'slot';
+
+      const isBusy = booked.includes(key);
+      const isPast = isToday && parseInt(key) <= nowHour;
+
+      if (isBusy) {
+        div.classList.add('busy');
+        div.textContent = label + ' ✕';
+      } else if (isPast) {
+        div.classList.add('past');
+        div.textContent = label;
+      } else {
+        div.classList.add('free');
+        div.textContent = label;
+        div.addEventListener('click', () => {
+          document.querySelectorAll('.slot.selected')
+            .forEach(s => s.classList.remove('selected'));
+          div.classList.add('selected');
+          selectedSlot = key;
+          $submit.disabled = false;
+        });
+      }
+      $slots.appendChild(div);
+    });
+  }
+
+  // ---------- Отправка ----------
+  $submit.addEventListener('click', () => {
+    const fio      = document.getElementById('fio').value.trim();
+    const room     = document.getElementById('room').value.trim();
+    const date     = $date.value;
+    const floor    = $floor.value;
+    const location = $location.value;
+
+    if (!fio || !room) {
+      showMsg('Заполните ФИО и комнату', false);
+      return;
+    }
+    if (!floor || !location) {
+      showMsg('Выберите этаж и расположение', false);
+      return;
+    }
+    if (!selectedSlot) {
+      showMsg('Выберите время', false);
+      return;
+    }
+
+    const point = pointKey(floor, location);
+
+    // Повторная проверка занятости
+    const busy = getBookings().some(b =>
+      b.date === date &&
+      b.point === point &&
+      String(b.machine) === String(selectedMachine) &&
+      b.time === selectedSlot
+    );
+    if (busy) {
+      showMsg('Это время уже занято на выбранной машинке', false);
+      renderSlots();
+      return;
+    }
+
+    saveBooking({
+      fio, room, date,
+      floor, location, point,
+      machine: selectedMachine,
+      time: selectedSlot,
+      created: Date.now()
+    });
+
+    showMsg(
+      `Готово! ${fio} (комн. ${room}) — ${date}, ${selectedSlot}, ` +
+      `${floor} этаж, ${location}, машинка №${selectedMachine}.`,
+      true
+    );
+
+    document.getElementById('fio').value = '';
+    document.getElementById('room').value = '';
+    renderSlots();
+  });
+
+  function showMsg(text, ok) {
+    $msg.textContent = text;
+    $msg.className = 'msg ' + (ok ? 'ok' : 'err');
+  }
+
+  // Перерисовка при изменении даты/этажа/расположения
+  $date.addEventListener('change', renderSlots);
+  $floor.addEventListener('change', renderSlots);
+  $location.addEventListener('change', renderSlots);
+
+  renderSlots();
+</script>
+</body>
+</html>
